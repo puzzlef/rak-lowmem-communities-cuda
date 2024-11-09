@@ -1,169 +1,158 @@
 #pragma once
 #include <cstdint>
+#include <cuda_runtime.h>
 #include "_main.hxx"
 
 
 
 
 #pragma region METHODS
+#pragma region ACCUMULATE
 /**
- * Accumulate edge weight to community in a full Misra-Gries sketch.
+ * Accumulate edge weight to community in a Misra-Gries sketch.
+ * @tparam SHARED are the slots shared among threads?
  * @param mcs majority linked communities (updated)
  * @param mws total edge weight to each majority community (updated)
- * @param has is community already in the list? (temporary buffer, updated)
- * @param fre an empty slot in the list (temporary buffer, updated)
+ * @param has is community already in the list? (scratch)
+ * @param frs a free slot in the list (scratch)
  * @param c community to accumulate edge weight to
  * @param w edge weight to accumulate
- * @param i thread index
+ * @param g cooperative thread group
+ * @param s slot index
  */
-template <class K, class V>
-inline void __device__ fullSketchAccumulateCudU(K *mcs, V *mws, int *has, int *fre, K c, V w, int i) {
+template <bool SHARED=false, class K, class V, class TG>
+inline void __device__ sketchAccumulateCudU(K *mcs, V *mws, int *has, int *frs, K c, V w, const TG& g, int s) {
   // Initialize variables.
-  if (i==0) *has = 0;
-  if (i==0) *fre = -1;
+  if (s==0) {
+    *has = 0;
+    *frs = -1;
+  }
+  g.sync();
   // Add edge weight to community.
-  if (mcs[i]==c) {
-    mws[i] += w;
+  if (mcs[s]==c) {
+    if (!SHARED) mws[s] += w;
+    else atomicAdd(mws+s, w);
     *has = 1;
   }
-  __syncthreads();
+  g.sync();
   // Done if community is already in the list.
   if (*has) return;
   // Find empty slot.
-  if (mws[i]==0) atomicMax(fre, i);
-  __syncthreads();
+  if (mws[s]==0) atomicMax(frs, s);
+  g.sync();
   // Add community to list.
-  if (*fre==i) {
-    mcs[i] = c;
-    mws[i] = w;
+  if (*frs==s) {
+    if (!SHARED) {
+      mcs[s] = c;
+      mws[s] = w;
+    }
+    else {
+      if (atomicCAS(mws+s, V(), w)==V()) mcs[s] = c;
+      else *frs = -1;
+    }
   }
+  if (SHARED) g.sync();  // `frs` may be been updated
   // Subtract edge weight from non-matching communities.
-  if (*fre<0) mws[i] -= w;
+  if (*frs<0) {
+    if (!SHARED) mws[s] -= w;
+    else atomicAdd(mws+s, -w);
+  }
 }
 
 
 /**
- * Accumulate edge weight to community in a warp-sized full Misra-Gries sketch.
+ * Accumulate edge weight to community in a warp-sized Misra-Gries sketch.
+ * @tparam SHARED are the slots shared among threads?
  * @param mcs majority linked communities (updated)
  * @param mws total edge weight to each majority community (updated)
  * @param c community to accumulate edge weight to
  * @param w edge weight to accumulate
- * @param i thread index
- * @note The size of the sketch has to be 32.
+ * @param g cooperative thread group
+ * @param s slot index
+ * @note Uses warp-specific optimization, but the sketch size must be 32.
  */
-template <class K, class V>
-inline void __device__ fullSketchAccumulateWarpCudU(K *mcs, V *mws, K c, V w, int i) {
+template <class K, class V, class TG>
+inline void __device__ sketchAccumulateWarpCudU(K *mcs, V *mws, K c, V w, const TG& g, int s) {
   const uint32_t ALL = 0xFFFFFFFF;
-  // Add edge weight to community.
-  if (mcs[i]==c) mws[i] += w;
-  uint32_t has = __ballot_sync(ALL, mcs[i]==c);
-  // Done if community is already in the list.
-  if (has) return;
-  // Find empty slot.
-  uint32_t fre = __ffs(__ballot_sync(ALL, mws[i]==0)) - 1;
-  // Add community to list.
-  if (fre==i) {
-    mcs[i] = c;
-    mws[i] = w;
-  }
-  // Subtract edge weight from non-matching communities.
-  if (fre==0) mws[i] -= w;
-}
-
-
-/**
- * Accumulate edge weight to community in a small Misra-Gries sketch.
- * @tparam SLOTS number of slots in the sketch
- * @param mcs majority linked communities (updated)
- * @param mws total edge weight to each majority community (updated)
- * @param has is community already in the list? (temporary buffer, updated)
- * @param fre an empty slot in the list (temporary buffer, updated)
- * @param c community to accumulate edge weight to
- * @param w edge weight to accumulate
- * @param i thread index
- */
-template <int SLOTS=8, class K, class V>
-inline void __device__ smallSketchAccumulateCudU(K *mcs, V *mws, int *has, int *fre, K c, V w, int i) {
-  const int s = i % SLOTS;  // Slot index
-  const int p = i / SLOTS;  // Page index
-  // Initialize variables.
-  if (s==0) has[p] = 0;
-  if (s==0) fre[p] = -1;
   // Add edge weight to community.
   if (mcs[s]==c) {
-    atomicAdd(&mws[s], w);
-    has[p] = 1;
+    if (!SHARED) mws[s] += w;
+    else atomicAdd(mws+s,  w);
   }
-  __syncthreads();
-  // Done if community is already in the list.
-  if (has[p]) return;
-  // Find empty slot.
-  if (mws[s]==0) atomicMax(&fre[p], s);
-  __syncthreads();
-  // Add community to list.
-  if (fre[p]==s) {
-    if (atomicCAS(&mws[s], V(), w)==V()) mcs[s] = c;
-    else fre[p] = -1;
-  }
-  __syncthreads();
-  // Subtract edge weight from non-matching communities.
-  if (fre[p]<0) atomicAdd(&mws[s], -w);
-}
-
-
-/**
- * Accumulate edge weight to community in a warp-sized small Misra-Gries sketch.
- * @param mcs majority linked communities (updated)
- * @param mws total edge weight to each majority community (updated)
- * @param c community to accumulate edge weight to
- * @param w edge weight to accumulate
- * @param i thread index
- * @note The size of the sketch has to be 32.
- */
-template <class K, class V>
-inline void __device__ smallSketchAccumulateWarpCudU(K *mcs, V *mws, K c, V w, int i) {
-  const uint32_t ALL = 0xFFFFFFFF;
-  const int s = i % 32;  // Slot index
-  // Add edge weight to community.
-  if (mcs[s]==c) atomicAdd(mws[s], w);
   uint32_t has = __ballot_sync(ALL, mcs[s]==c);
   // Done if community is already in the list.
   if (has) return;
   // Find empty slot.
-  uint32_t fre = __ffs(__ballot_sync(ALL, mws[s]==0)) - 1;
+  uint32_t fre = __ballot_sync(ALL, mws[s]==0);
+  uint32_t frs = __ffs(fre) - 1;
   // Add community to list.
-  if (fre==s) {
-    if (atomicCAS(&mws[s], V(), w)==V()) mcs[s] = c;
-    else fre = -1;
+  if (frs==s) {
+    if (!SHARED) {
+      mcs[s] = c;
+      mws[s] = w;
+    }
+    else {
+      if (atomicCAS(mws+s, V(), w)==V()) mcs[s] = c;
+      else fre = 0;
+    }
   }
-  uint32_t ful = __all_sync(ALL, fre<0);
+  if (SHARED) g.sync();  // `fre` may be been updated
   // Subtract edge weight from non-matching communities.
-  if (ful) atomicAdd(mws[s], -w);
+  if (fre==0) {
+    if (!SHARED) mws[s] -= w;
+    else atomicAdd(mws+s, -w);
+  }
 }
+#pragma endregion
 
 
+
+
+#pragma region CLEAR
 /**
- * Accumulate edge weight to community in a full Misra-Gries sketch.
+ * Clear a Misra-Gries sketch.
+ * @tparam SHARED are the slots shared among threads?
  * @tparam SLOTS number of slots in the sketch
- * @tparam BLIM size of each thread block
- * @tparam WARP whether to use warp-sized sketch
- * @param mcs majority linked communities (updated)
  * @param mws total edge weight to each majority community (updated)
- * @param has is community already in the list? (temporary buffer, updated)
- * @param fre an empty slot in the list (temporary buffer, updated)
- * @param c community to accumulate edge weight to
- * @param w edge weight to accumulate
+ * @param t thread index
+ */
+template <bool SHARED=false, int SLOTS=8, class V>
+inline void __device__ sketchClearCudU(V *mws, int t) {
+  if (!SHARED || t<SLOTS) mws[t] = V();
+}
+#pragma endregion
+
+
+
+
+#pragma region MAX
+/**
+ * Find entry in Misra-Gries sketch with maximum value [device function].
+ * @param mcs majority linked communities (updated, entry 0 is max)
+ * @param mws total edge weight to each majority community (updated, entry 0 is max)
+ * @param SLOTS number of slots in the sketch
  * @param i thread index
  */
-template <int SLOTS=8, int BLIM=128, bool WARP=true, class K, class V>
-inline void __device__ sketchAccumulateCudU(K *mcs, V *mws, int *has, int *fre, K c, V w, int i) {
-  if (SLOTS < BLIM) {
-    if (SLOTS==32 && WARP) smallSketchAccumulateWarpCudU(mcs, mws, c, w, i);
-    else smallSketchAccumulateCudU<SLOTS>(mcs, mws, has, fre, c, w, i);
+template <class K, class V>
+inline void __device__ sketchMaxCudU(K *mcs, V *mws, int SLOTS, int i) {
+  for (; SLOTS>32;) {
+    int DS = SLOTS/2;
+    if (i<DS && mws[i+DS] > mws[i]) {
+      mcs[i] = mcs[i+DS];
+      mws[i] = mws[i+DS];
+    }
+    __syncthreads();
+    SLOTS = DS;
   }
-  else {
-    if (SLOTS==32 && WARP) fullSketchAccumulateWarpCudU(mcs, mws, c, w, i);
-    else fullSketchAccumulateCudU(mcs, mws, has, fre, c, w, i);
+  for (; SLOTS>1;) {
+    int DS = SLOTS/2;
+    if (i<DS && mws[i+DS] > mws[i]) {
+      mcs[i] = mcs[i+DS];
+      mws[i] = mws[i+DS];
+    }
+    __syncwarp();
+    SLOTS = DS;
   }
 }
+#pragma endregion
 #pragma endregion

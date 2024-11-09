@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cuda_runtime.h>
+#include <cooperative_groups.h>
 #include "_debug.hxx"
 #include "_cmath.hxx"
 
@@ -51,6 +52,55 @@ typedef unsigned long long int uint64_cu;
  * Synchronize all threads in a block.
  */
 #define __syncthreads()
+
+
+namespace cooperative_groups {
+/**
+ * A shell class that represents a block of threads in CUDA's cooperative groups.
+ * Provides basic methods for accessing thread information and synchronization.
+ */
+class thread_group {
+public:
+  /**
+   * Get the rank of the current thread within the group.
+   * @returns The rank (ID) of the thread in the group.
+   */
+  inline int __device__ thread_rank() const { return 0; }
+
+  /**
+   * Get the total number of threads in the group.
+   * @returns The total number of threads in the group.
+   */
+  inline int __device__ size() const { return 1; }
+
+  /**
+   * Synchronize all threads within the group.
+   */
+  __device__ void sync() const {}
+
+  /**
+   * Get the thread group for the current thread block.
+   * @returns The thread group for the current thread block.
+   */
+  thread_group this_thread_block() { return thread_group(); }
+
+  /**
+   * Get the thread group for the current grid.
+   * @returns The thread group for the current grid.
+   */
+  thread_group this_grid() { return thread_group(); }
+};
+
+
+/**
+ * Partition the current thread block into smaller groups.
+ * @tparam SIZE number of threads per group
+ * @param g thread group to partition
+ * @returns partitioned thread group
+ */
+template <unsigned int SIZE, class T>
+inline thread_group tiled_partition(const T& g) { return thread_group(); }
+}
 #endif
 #pragma endregion
 

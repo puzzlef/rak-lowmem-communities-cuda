@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <vector>
 #include <algorithm>
+#include <cuda_runtime.h>
 #include "_main.hxx"
 #include "rak.hxx"
 #include "hashtableCuda.hxx"

@@ -139,7 +139,6 @@ inline void __device__ hashtableMaxThreadCudU(K *hk, V *hv, size_t H, size_t i, 
  * @param hv hashtable values (updated, entry 0 is max)
  * @param H capacity of hashtable (prime)
  * @param i start index
- * @param DI index stride
  */
 template <class K, class V>
 inline void __device__ hashtableMaxBlockReduceCudU(K *hk, V *hv, size_t H, size_t i) {

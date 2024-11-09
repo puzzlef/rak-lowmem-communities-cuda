@@ -20,3 +20,4 @@
 #include "rak.hxx"
 #include "rakLowmem.hxx"
 #include "rakCuda.hxx"
+#include "rakLowmemCuda.hxx"

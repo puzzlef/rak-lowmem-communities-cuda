@@ -16,6 +16,7 @@
 #include "dfs.hxx"
 #include "batch.hxx"
 #include "hashtableCuda.hxx"
+#include "sketchCuda.hxx"
 #include "rak.hxx"
 #include "rakLowmem.hxx"
 #include "rakCuda.hxx"

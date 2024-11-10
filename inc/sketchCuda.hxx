@@ -33,21 +33,24 @@ inline void __device__ sketchAccumulateCudU(K *mcs, V *mws, int *has, K c, V w, 
   g.sync();
   // Done if community is already in the list.
   if (*has==0) return;
-  // Find empty slot.
-  if (mws[s]==V()) atomicMax(has, s);
-  g.sync();
-  // Add community to list.
-  if (*has==s) {
-    if (!SHARED) {
-      mcs[s] = c;
-      mws[s] = w;
+  do {
+    // Find empty slot.
+    if (mws[s]==V()) atomicMax(has, s);
+    g.sync();
+    if (*has<0) break;
+    // Add community to list.
+    if (*has==s) {
+      if (!SHARED) {
+        mcs[s] = c;
+        mws[s] = w;
+      }
+      else {
+        if (atomicCAS(&mws[s], V(), w)==V()) mcs[s] = c;
+        else *has = -1;
+      }
     }
-    else {
-      if (atomicCAS(&mws[s], V(), w)==V()) mcs[s] = c;
-      else *has = -1;
-    }
-  }
-  if (SHARED) g.sync();  // `has` may be been updated
+    if (SHARED) g.sync();  // `has` may be been updated
+  } while (SHARED && *has<0);
   // Subtract edge weight from non-matching communities.
   if (*has<0) {
     if (!SHARED) mws[s] -= w;
@@ -78,21 +81,26 @@ inline void __device__ sketchAccumulateWarpCudU(K *mcs, V *mws, K c, V w, const 
   uint32_t has = __ballot_sync(ALL, mcs[s]==c);
   // Done if community is already in the list.
   if (has) return;
-  // Find empty slot.
-  uint32_t fre = __ballot_sync(ALL, mws[s]==V());
-  uint32_t frs = __ffs(fre) - 1;
-  // Add community to list.
-  if (frs==s) {
-    if (!SHARED) {
-      mcs[s] = c;
-      mws[s] = w;
+  uint32_t fre = 0;
+  while (1) {
+    // Find empty slot.
+    fre = __ballot_sync(ALL, mws[s]==V());
+    uint32_t frs = __ffs(fre) - 1;
+    if (fre==0) break;
+    // Add community to list.
+    if (frs==s) {
+      if (!SHARED) {
+        mcs[s] = c;
+        mws[s] = w;
+      }
+      else {
+        if (atomicCAS(&mws[s], V(), w)==V()) mcs[s] = c;
+        else fre = 0;
+      }
     }
-    else {
-      if (atomicCAS(&mws[s], V(), w)==V()) mcs[s] = c;
-      else fre = 0;
-    }
+    if (SHARED) fre = __all_sync(ALL, fre!=0);  // `fre` may be been updated
+    if (!SHARED || fre!=0) break;
   }
-  if (SHARED) fre = __all_sync(ALL, fre!=0);  // `fre` may be been updated
   // Subtract edge weight from non-matching communities.
   if (fre==0) {
     if (!SHARED) mws[s] -= w;

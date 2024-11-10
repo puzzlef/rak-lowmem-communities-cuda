@@ -44,7 +44,7 @@ inline void __device__ rakLowmemScanCommunitiesCudU(K *mcs, V *mws, int *has, co
     V w = xwei[EO+i];
     K c = vcom[v];
     if (!SELF && u==v) continue;
-    if (USEWARP)  sketchAccumulateWarpCudU(mcs, mws, c, w, g, s);
+    if (USEWARP) sketchAccumulateWarpCudU<SHARED>(mcs, mws, c, w, g, s);
     else sketchAccumulateCudU<SHARED>(mcs, mws, has, c, w, g, s);
   }
 }
@@ -78,14 +78,17 @@ void __global__ rakLowmemMoveIterationGroupCukU(uint64_cu *ncom, K *vcom, F *vaf
   __shared__ V   mws[BLIM];
   __shared__ int has[USEWARP? 1 : PLIM];
   __shared__ uint64_cu ncomb[PLIM];
+  __shared__ F vaffb[PLIM];
   const auto g = tiled_partition<SLOTS>(this_thread_block());
   const int  s = t % SLOTS;
   const int  p = t / SLOTS;
-  K* const pmcs = &mcs[p*PLIM];
-  V* const pmws = &mws[p*PLIM];
+  K* const pmcs = &mcs[p*SLOTS];
+  V* const pmws = &mws[p*SLOTS];
   if (s==0) ncomb[p] = 0;
   for (K u=NB+b*PLIM+p; u<NE; u+=G*PLIM) {
-    if (!vaff[u]) continue;
+    if (s==0) vaffb[p] = vaff[u];
+    g.sync();
+    if (!vaffb[p]) continue;
     K d = vcom[u];
     // Scan communities connected to u.
     sketchClearCudU<false, SLOTS>(pmws, s);
@@ -129,7 +132,7 @@ template <int SLOTS=8, int BLIM=128, bool TRYWARP=true, class O, class K, class 
 inline void rakLowmemMoveIterationGroupCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K NB, K NE, bool PICKLESS) {
   constexpr int PLIM = BLIM/SLOTS;
   const int B = BLIM;
-  const int G = gridSizeCu<true>(NE-NB, B*PLIM, GRID_LIMIT_MAP_CUDA);
+  const int G = gridSizeCu(NE-NB, PLIM, GRID_LIMIT_MAP_CUDA);
   rakLowmemMoveIterationGroupCukU<SLOTS, BLIM, TRYWARP><<<G, B>>>(ncom, vcom, vaff, xoff, xedg, xwei, NB, NE, PICKLESS);
 }
 
@@ -139,6 +142,7 @@ inline void rakLowmemMoveIterationGroupCuU(uint64_cu *ncom, K *vcom, F *vaff, co
  * @tparam SLOTS number of slots in hashtable
  * @tparam BLIM size of each thread block
  * @tparam TRYWARP try warp-specific optimization?
+ * @tparam TRYMERGE try merging separate sketches?
  * @param ncom number of changed vertices (updated)
  * @param vcom community each vertex belongs to (updated)
  * @param vaff vertex affected flags (updated)
@@ -159,12 +163,15 @@ void __global__ rakLowmemMoveIterationBlockCukU(uint64_cu *ncom, K *vcom, F *vaf
   __shared__ V mws[SLOTS];
   __shared__ int has[USEWARP? 1 : PLIM];
   __shared__ uint64_cu ncomb;
+  __shared__ F vaffb;
   const auto g = tiled_partition<SLOTS>(this_thread_block());
   const int  s = t % SLOTS;
   const int  p = t / SLOTS;
   if (t==0) ncomb = 0;
   for (K u=NB+b; u<NE; u+=G) {
-    if (!vaff[u]) continue;
+    if (t==0) vaffb = vaff[u];
+    __syncthreads();
+    if (!vaffb) continue;
     K d = vcom[u];
     // Scan communities connected to u.
     sketchClearCudU<SHARED, SLOTS>(mws, t);
@@ -241,9 +248,16 @@ inline int rakLowmemLoopCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, co
   while (l<L) {
     bool PICKLESS = l % PICKSTEP == 0;
     fillValueCuW(ncom, 1, uint64_cu());
-    if (NL)    rakLowmemMoveIterationGroupCuU<SLOTS,  32, TRYWARP>(ncom, vcom, vaff, xoff, xedg, xwei, K(), NL,   PICKLESS);
-    if (NL+NM) rakLowmemMoveIterationBlockCuU<SLOTS,  32, TRYWARP>(ncom, vcom, vaff, xoff, xedg, xwei, NL, NL+NM, PICKLESS);
-    if (N)     rakLowmemMoveIterationBlockCuU<SLOTS, 128, TRYWARP>(ncom, vcom, vaff, xoff, xedg, xwei, NL+NM, N,  PICKLESS);
+    // if (NL)    rakLowmemMoveIterationGroupCuU<SLOTS,  32, TRYWARP>(ncom, vcom, vaff, xoff, xedg, xwei, K(), NL,   PICKLESS);
+    // if (NL+NM) rakLowmemMoveIterationBlockCuU<SLOTS,  32, TRYWARP>(ncom, vcom, vaff, xoff, xedg, xwei, NL, NL+NM, PICKLESS);
+    // if (N)     rakLowmemMoveIterationBlockCuU<SLOTS, 128, TRYWARP>(ncom, vcom, vaff, xoff, xedg, xwei, NL+NM, N,  PICKLESS);
+    //// rakLowmemMoveIterationBlockCuU<32, 32, false>(ncom, vcom, vaff, xoff, xedg, xwei, K(), N,  PICKLESS);
+    //// rakLowmemMoveIterationBlockCuU<32, 32, true>(ncom, vcom, vaff, xoff, xedg, xwei, K(), N,  PICKLESS);
+    //F5 rakLowmemMoveIterationBlockCuU<32, 128, false>(ncom, vcom, vaff, xoff, xedg, xwei, K(), N,  PICKLESS);
+    //F7 rakLowmemMoveIterationBlockCuU<32, 128, true>(ncom, vcom, vaff, xoff, xedg, xwei, K(), N,  PICKLESS);
+    //F0 rakLowmemMoveIterationGroupCuU<32, 128, false>(ncom, vcom, vaff, xoff, xedg, xwei, K(), N,  PICKLESS);
+    //F0 rakLowmemMoveIterationGroupCuU<32, 128, true>(ncom, vcom, vaff, xoff, xedg, xwei, K(), N,  PICKLESS);
+    rakLowmemMoveIterationBlockCuU<32, 128, true>(ncom, vcom, vaff, xoff, xedg, xwei, K(), N,  PICKLESS);
     TRY_CUDA( cudaMemcpy(&n, ncom, sizeof(uint64_cu), cudaMemcpyDeviceToHost) ); ++l;
     if (!PICKLESS && double(n)/N <= E) break;
   }

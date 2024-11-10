@@ -308,6 +308,39 @@ inline void __device__ unusedCuda(T&&) {}
 
 
 #pragma region METHODS
+#pragma region ATOMIC CAS
+/**
+ * Perform an atomic compare-and-swap operation on a float value.
+ * @param address address of value
+ * @param compare expected value
+ * @param val new value
+ * @returns old value
+ */
+inline float __device__ atomicCAS(float *address, float compare, float val) {
+  int icompare = __float_as_int(compare);
+  int ival     = __float_as_int(val);
+  return __int_as_float(atomicCAS((int*) address, icompare, ival));
+}
+
+
+/**
+ * Perform an atomic compare-and-swap operation on a double value.
+ * @param address address of value
+ * @param compare expected value
+ * @param val new value
+ * @returns old value
+ */
+inline double __device__ atomicCAS(double *address, double compare, double val) {
+  using T = unsigned long long int;
+  T icompare = __double_as_longlong(compare);
+  T ival     = __double_as_longlong(val);
+  return __longlong_as_double(atomicCAS((T*) address, icompare, ival));
+}
+#pragma endregion
+
+
+
+
 #pragma region READ
 /**
  * Read a value from global memory.

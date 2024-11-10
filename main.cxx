@@ -79,6 +79,11 @@ void runExperiment(const G& x) {
     auto b0 = rakStaticCuda(x, {REPEAT_METHOD});
     flog(b0, "rakStaticCuda");
   }
+  // Find static low-memory RAK, using CUDA.
+  {
+    auto b0 = rakLowmemStaticCuda(x, {REPEAT_METHOD});
+    flog(b0, "rakLowmemStaticCuda");
+  }
 }
 
 

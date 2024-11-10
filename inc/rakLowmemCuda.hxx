@@ -93,7 +93,7 @@ void __global__ rakLowmemMoveIterationGroupCukU(uint64_cu *ncom, K *vcom, F *vaf
     rakLowmemScanCommunitiesCudU<false, false, USEWARP>(pmcs, pmws, has+p, xoff, xedg, xwei, vcom, u, g, s, O(0), O(1));
     g.sync();
     // Find best community for u.
-    sketchMaxCudU(pmcs, pmws, SLOTS, s);
+    sketchMaxGroupReduceCudU(pmcs, pmws, SLOTS, g, s);
     g.sync();
     if (s==0) vaff[u] = F(0);  // Mark u as unaffected
     if  (!pmws[0]) continue;    // No community found
@@ -172,7 +172,7 @@ void __global__ rakLowmemMoveIterationBlockCukU(uint64_cu *ncom, K *vcom, F *vaf
     rakLowmemScanCommunitiesCudU<false, SHARED, USEWARP>(mcs, mws, has+p, xoff, xedg, xwei, vcom, u, g, s, O(p), O(PLIM));
     __syncthreads();
     // Find best community for u.
-    sketchMaxCudU(mcs, mws, SLOTS, t);
+    sketchMaxBlockReduceCudU(mcs, mws, SLOTS, t);
     __syncthreads();
     if (t==0) vaff[u] = F(0);  // Mark u as unaffected
     if  (!mws[0]) continue;    // No community found

@@ -123,14 +123,36 @@ inline void __device__ sketchClearCudU(V *mws, int i) {
 
 #pragma region MAX
 /**
- * Find entry in Misra-Gries sketch with maximum value [device function].
+ * Find entry in Misra-Gries sketch with maximum value, using cooperative group [device function].
+ * @param mcs majority linked communities (updated, entry 0 is max)
+ * @param mws total edge weight to each majority community (updated, entry 0 is max)
+ * @param SLOTS number of slots in the sketch
+ * @param g cooperative thread group
+ * @param i thread index
+ */
+template <class K, class V, class TG>
+inline void __device__ sketchMaxGroupReduceCudU(K *mcs, V *mws, int SLOTS, const TG& g, int i) {
+  for (; SLOTS>1;) {
+    int DS = SLOTS/2;
+    if (i<DS && mws[i+DS] > mws[i]) {
+      mcs[i] = mcs[i+DS];
+      mws[i] = mws[i+DS];
+    }
+    g.sync();
+    SLOTS = DS;
+  }
+}
+
+
+/**
+ * Find entry in Misra-Gries sketch with maximum value, using thread block [device function].
  * @param mcs majority linked communities (updated, entry 0 is max)
  * @param mws total edge weight to each majority community (updated, entry 0 is max)
  * @param SLOTS number of slots in the sketch
  * @param i thread index
  */
 template <class K, class V>
-inline void __device__ sketchMaxCudU(K *mcs, V *mws, int SLOTS, int i) {
+inline void __device__ sketchMaxBlockReduceCudU(K *mcs, V *mws, int SLOTS, int i) {
   for (; SLOTS>32;) {
     int DS = SLOTS/2;
     if (i<DS && mws[i+DS] > mws[i]) {

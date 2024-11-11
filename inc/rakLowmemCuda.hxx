@@ -153,20 +153,24 @@ inline void rakLowmemMoveIterationGroupCuU(uint64_cu *ncom, K *vcom, F *vaff, co
  * @param NE end vertex (exclusive)
  * @param PICKLESS allow only picking smaller community id?
  */
-template <int SLOTS=8, int BLIM=128, bool TRYWARP=true, class O, class K, class V, class F>
+template <int SLOTS=8, int BLIM=128, bool TRYWARP=true, bool TRYMERGE=false, class O, class K, class V, class F>
 void __global__ rakLowmemMoveIterationBlockCukU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K NB, K NE, bool PICKLESS) {
   DEFINE_CUDA(t, b, B, G);
-  constexpr int  PLIM    = BLIM/SLOTS;
-  constexpr bool SHARED  = SLOTS < BLIM;
-  constexpr bool USEWARP = TRYWARP && SLOTS==32;
-  __shared__ K mcs[SLOTS];
-  __shared__ V mws[SLOTS];
+  constexpr int  PLIM = BLIM/SLOTS;
+  constexpr bool USEWARP     =  TRYWARP  && SLOTS==32;
+  constexpr bool USEMERGE    =  TRYMERGE && PLIM > 1;
+  constexpr bool SHARED      = !USEMERGE && SLOTS < BLIM;
+  constexpr bool SHAREDMERGE =  USEMERGE && PLIM > 2;
+  __shared__ K mcs[USEMERGE? BLIM : SLOTS];
+  __shared__ V mws[USEMERGE? BLIM : SLOTS];
   __shared__ int has[USEWARP? 1 : PLIM];
   __shared__ uint64_cu ncomb;
   __shared__ F vaffb;
   const auto g = tiled_partition<SLOTS>(this_thread_block());
   const int  s = t % SLOTS;
   const int  p = t / SLOTS;
+  K* const pmcs = USEMERGE? &mcs[p*SLOTS] : mcs;
+  V* const pmws = USEMERGE? &mws[p*SLOTS] : mws;
   if (t==0) ncomb = 0;
   for (K u=NB+b; u<NE; u+=G) {
     if (t==0) vaffb = vaff[u];
@@ -176,8 +180,14 @@ void __global__ rakLowmemMoveIterationBlockCukU(uint64_cu *ncom, K *vcom, F *vaf
     // Scan communities connected to u.
     sketchClearCudU<SHARED, SLOTS>(mws, t);
     __syncthreads();
-    rakLowmemScanCommunitiesCudU<false, SHARED, USEWARP>(mcs, mws, has+p, xoff, xedg, xwei, vcom, u, g, s, O(p), O(PLIM));
+    rakLowmemScanCommunitiesCudU<false, SHARED, USEWARP>(pmcs, pmws, has+p, xoff, xedg, xwei, vcom, u, g, s, O(p), O(PLIM));
     __syncthreads();
+    // Merge sketches if necessary.
+    if (USEMERGE && p>0) {
+      if (!USEWARP) sketchMergeCudU<SHAREDMERGE>(mcs, mws, has+p, pmcs, pmws, g, s);
+      else      sketchMergeWarpCudU<SHAREDMERGE>(mcs, mws, pmcs, pmws, g, s);
+    }
+    if (USEMERGE) __syncthreads();
     // Find best community for u.
     sketchMaxBlockReduceCudU(mcs, mws, SLOTS, t);
     __syncthreads();
@@ -211,11 +221,11 @@ void __global__ rakLowmemMoveIterationBlockCukU(uint64_cu *ncom, K *vcom, F *vaf
  * @param NE end vertex (exclusive)
  * @param PICKLESS allow only picking smaller community id?
  */
-template <int SLOTS=8, int BLIM=128, bool TRYWARP=true, class O, class K, class V, class F>
+template <int SLOTS=8, int BLIM=128, bool TRYWARP=true, bool TRYMERGE=false, class O, class K, class V, class F>
 inline void rakLowmemMoveIterationBlockCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K NB, K NE, bool PICKLESS) {
   const int B = BLIM;
   const int G = gridSizeCu<true>(NE-NB, B, GRID_LIMIT_MAP_CUDA);
-  rakLowmemMoveIterationBlockCukU<SLOTS, BLIM, TRYWARP><<<G, B>>>(ncom, vcom, vaff, xoff, xedg, xwei, NB, NE, PICKLESS);
+  rakLowmemMoveIterationBlockCukU<SLOTS, BLIM, TRYWARP, TRYMERGE><<<G, B>>>(ncom, vcom, vaff, xoff, xedg, xwei, NB, NE, PICKLESS);
 }
 #pragma endregion
 
@@ -257,7 +267,7 @@ inline int rakLowmemLoopCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, co
     //F7 rakLowmemMoveIterationBlockCuU<32, 128, true>(ncom, vcom, vaff, xoff, xedg, xwei, K(), N,  PICKLESS);
     //F0 rakLowmemMoveIterationGroupCuU<32, 128, false>(ncom, vcom, vaff, xoff, xedg, xwei, K(), N,  PICKLESS);
     //F0 rakLowmemMoveIterationGroupCuU<32, 128, true>(ncom, vcom, vaff, xoff, xedg, xwei, K(), N,  PICKLESS);
-    rakLowmemMoveIterationBlockCuU<32, 128, true>(ncom, vcom, vaff, xoff, xedg, xwei, K(), N,  PICKLESS);
+    rakLowmemMoveIterationBlockCuU<32, 128, true, true>(ncom, vcom, vaff, xoff, xedg, xwei, K(), N,  PICKLESS);
     TRY_CUDA( cudaMemcpy(&n, ncom, sizeof(uint64_cu), cudaMemcpyDeviceToHost) ); ++l;
     if (!PICKLESS && double(n)/N <= E) break;
   }

@@ -112,6 +112,56 @@ inline void __device__ sketchAccumulateWarpCudU(K *mcs, V *mws, K c, V w, const 
 
 
 
+#pragma region MERGE
+/**
+ * Merge two Misra-Gries sketches [device function].
+ * @tparam SHARED are the slots shared among threads?
+ * @tparam SLOTS number of slots in the sketch
+ * @param mcs majority linked communities (updated)
+ * @param mws total edge weight to each majority community (updated)
+ * @param has has community in list / free slot index (scratch)
+ * @param pmcs majority linked communities to merge
+ * @param pmws total edge weight to each majority community to merge
+ * @param g cooperative thread group
+ * @param s slot index
+ */
+template <bool SHARED=false, int SLOTS=8, class K, class V, class TG>
+inline void __device__ sketchMergeCudU(K *mcs, V *mws, int *has, const K* pmcs, const V* pmws, const TG& g, int s) {
+  for (int i=0; i<SLOTS; ++i) {
+    K c = pmcs[i];
+    V w = pmws[i];
+    if (!w) continue;
+    sketchAccumulateCudU<SHARED>(mcs, mws, has, c, w, g, s);
+  }
+}
+
+
+/**
+ * Merge two warp-sized Misra-Gries sketches [device function].
+ * @tparam SHARED are the slots shared among threads?
+ * @param mcs majority linked communities (updated)
+ * @param mws total edge weight to each majority community (updated)
+ * @param pmcs majority linked communities to merge
+ * @param pmws total edge weight to each majority community to merge
+ * @param g cooperative thread group
+ * @param s slot index
+ * @note Uses warp-specific optimization, but the sketch size must be 32.
+ */
+template <bool SHARED=false, class K, class V, class TG>
+inline void __device__ sketchMergeWarpCudU(K *mcs, V *mws, const K* pmcs, const V* pmws, const TG& g, int s) {
+  constexpr int SLOTS = 32;
+  for (int i=0; i<SLOTS; ++i) {
+    K c = pmcs[i];
+    V w = pmws[i];
+    if (!w) continue;
+    sketchAccumulateWarpCudU<SHARED>(mcs, mws, c, w, g, s);
+  }
+}
+#pragma endregion
+
+
+
+
 #pragma region CLEAR
 /**
  * Clear a Misra-Gries sketch [device function].

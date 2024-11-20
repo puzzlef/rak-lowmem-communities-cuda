@@ -74,20 +74,22 @@ void runExperiment(const G& x) {
     auto b0 = rakStaticOmp(x, {REPEAT_METHOD});
     flog(b0, "rakStaticOmp");
   }
-  // Find static low-memory RAK, using OpenMP.
-  {
-    auto b0 = rakLowmemStaticOmp(x, {REPEAT_METHOD});
-    flog(b0, "rakLowmemStaticOmp");
-  }
   // Find static low-memory RAK, using CUDA.
-  for (int i=0; i<1; ++i) {
-    auto b0 = rakLowmemStaticCuda(x, {REPEAT_METHOD});
+  {
+    auto b0 = rakLowmemStaticCuda<8, false, false>(x, {REPEAT_METHOD});
     flog(b0, "rakLowmemStaticCuda");
   }
-  // Find static RAK, using CUDA.
   {
-    auto b0 = rakStaticCuda(x, {REPEAT_METHOD});
-    flog(b0, "rakStaticCuda");
+    auto b0 = rakLowmemStaticCuda<8, true, false>(x, {REPEAT_METHOD});
+    flog(b0, "rakLowmemStaticCudaWarp");
+  }
+  {
+    auto b0 = rakLowmemStaticCuda<8, false, true>(x, {REPEAT_METHOD});
+    flog(b0, "rakLowmemStaticCudaMerge");
+  }
+  {
+    auto b0 = rakLowmemStaticCuda<8, true, true>(x, {REPEAT_METHOD});
+    flog(b0, "rakLowmemStaticCudaWarpMerge");
   }
 }
 

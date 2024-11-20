@@ -63,9 +63,9 @@ void runExperiment(const G& x) {
   auto flog = [&](const auto& ans, const char *technique) {
     printf(
       "{%03d threads} -> "
-      "{%09.1fms, %09.1fms mark, %09.1fms init, %04d iters, %01.9f modularity} %s\n",
+      "{%09.1fms, %09.1fms mark, %09.1fms init, %09.4fGB memory, %04d iters, %01.9f modularity} %s\n",
       MAX_THREADS,
-      ans.time, ans.markingTime, ans.initializationTime,
+      ans.time, ans.markingTime, ans.initializationTime, ans.memory,
       ans.iterations, getModularity(x, ans, M), technique
     );
   };
@@ -73,6 +73,11 @@ void runExperiment(const G& x) {
   {
     auto b0 = rakStaticOmp(x, {REPEAT_METHOD});
     flog(b0, "rakStaticOmp");
+  }
+  // Find static low-memory RAK, using OpenMP.
+  {
+    auto b0 = rakLowmemStaticOmp(x, {REPEAT_METHOD});
+    flog(b0, "rakLowmemStaticOmp");
   }
   // Find static low-memory RAK, using CUDA.
   for (int i=0; i<1; ++i) {

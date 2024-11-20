@@ -63,6 +63,8 @@ struct RakResult {
   float markingTime;
   /** Time spent in milliseconds for initializing community memberships. */
   float initializationTime;
+  /** Memory used in gigabytes. */
+  float memory;
   #pragma endregion
 
 
@@ -74,9 +76,10 @@ struct RakResult {
    * @param time time spent in milliseconds
    * @param markingTime time spent in milliseconds for initial marking of affected vertices
    * @param initializationTime time spent in initializing community memberships
+   * @param memory memory used in gigabytes
    */
-  RakResult(vector<K>&& membership, int iterations=0, float time=0, float markingTime=0, float initializationTime=0) :
-  membership(membership), iterations(iterations), time(time), markingTime(markingTime), initializationTime(initializationTime) {}
+  RakResult(vector<K>&& membership, int iterations=0, float time=0, float markingTime=0, float initializationTime=0, float memory=0) :
+  membership(membership), iterations(iterations), time(time), markingTime(markingTime), initializationTime(initializationTime), memory(memory) {}
 
 
   /**
@@ -86,9 +89,10 @@ struct RakResult {
    * @param time time spent in milliseconds
    * @param markingTime time spent in milliseconds for initial marking of affected vertices
    * @param initializationTime time spent in initializing community memberships
+   * @param memory memory used in gigabytes
    */
-  RakResult(vector<K>& membership, int iterations=0, float time=0, float markingTime=0, float initializationTime=0) :
-  membership(move(membership)), iterations(iterations), time(time), markingTime(markingTime), initializationTime(initializationTime) {}
+  RakResult(vector<K>& membership, int iterations=0, float time=0, float markingTime=0, float initializationTime=0, float memory=0) :
+  membership(move(membership)), iterations(iterations), time(time), markingTime(markingTime), initializationTime(initializationTime), memory(memory) {}
   #pragma endregion
 };
 #pragma endregion
@@ -275,12 +279,16 @@ inline auto rakInvokeOmp(const G& x, const RakOptions& o, FI fi, FM fm, FA fa) {
   // Get graph properties.
   size_t S = x.span();
   size_t N = x.order();
+  // Measure initial memory usage.
+  float m0 = measureMemoryUsage();
   // Allocate buffers.
   vector<F> vaff(S);  // Affected vertex flag
   vector<K> vcom(S);  // Community membership
   vector<vector<K>*> vcs(T);    // Hashtable keys
   vector<vector<W>*> vcout(T);  // Hashtable values
   rakAllocateHashtablesW(vcs, vcout, S);
+  // Measure memory usage after allocation.
+  float m1 = measureMemoryUsage();
   // Perform RAK algorithm.
   float tm = 0, ti = 0;  // Time spent in different phases
   float t  = measureDuration([&]() {
@@ -295,7 +303,7 @@ inline auto rakInvokeOmp(const G& x, const RakOptions& o, FI fi, FM fm, FA fa) {
     }
   }, o.repeat);
   rakFreeHashtablesW(vcs, vcout);
-  return RakResult<K>(vcom, l, t, tm/o.repeat, ti/o.repeat);
+  return RakResult<K>(vcom, l, t, tm/o.repeat, ti/o.repeat, m1-m0);
 }
 #pragma endregion
 

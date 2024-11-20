@@ -355,6 +355,9 @@ inline auto rakLowmemInvokeCuda(const G& x, const RakOptions& o, FI fi, FM fm) {
   TRY_CUDA( cudaMalloc(&xoffD, (N+1) * sizeof(O)) );
   TRY_CUDA( cudaMalloc(&xedgD,  M    * sizeof(K)) );
   TRY_CUDA( cudaMalloc(&xweiD,  M    * sizeof(V)) );
+  // Measure initial memory usage.
+  float m0 = measureMemoryUsageCu();
+  // Allocate device memory.
   TRY_CUDA( cudaMalloc(&vcomD,  N    * sizeof(K)) );
   TRY_CUDA( cudaMalloc(&vaffD,  N    * sizeof(F)) );
   TRY_CUDA( cudaMalloc(&ncomD,  1    * sizeof(uint64_cu)) );
@@ -362,6 +365,8 @@ inline auto rakLowmemInvokeCuda(const G& x, const RakOptions& o, FI fi, FM fm) {
   TRY_CUDA( cudaMemcpy(xoffD, xoff.data(), (N+1) * sizeof(O), cudaMemcpyHostToDevice) );
   TRY_CUDA( cudaMemcpy(xedgD, xedg.data(),  M    * sizeof(K), cudaMemcpyHostToDevice) );
   TRY_CUDA( cudaMemcpy(xweiD, xwei.data(),  M    * sizeof(V), cudaMemcpyHostToDevice) );
+  // Measure memory usage after allocation.
+  float m1 = measureMemoryUsageCu();
   // Perform RAK algorithm on device.
   float tm = 0, ti = 0;
   float t  = measureDuration([&]() {
@@ -382,7 +387,7 @@ inline auto rakLowmemInvokeCuda(const G& x, const RakOptions& o, FI fi, FM fm) {
   TRY_CUDA( cudaFree(vcomD) );
   TRY_CUDA( cudaFree(vaffD) );
   TRY_CUDA( cudaFree(ncomD) );
-  return RakResult<K>(vcom, l, t, tm/o.repeat, ti/o.repeat);
+  return RakResult<K>(vcom, l, t, tm/o.repeat, ti/o.repeat, m1-m0);
 }
 #pragma endregion
 

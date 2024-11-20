@@ -308,6 +308,21 @@ inline void __device__ unusedCuda(T&&) {}
 
 
 #pragma region METHODS
+#pragma region MEASURE MEMORY USAGE
+/**
+ * Measure the GPU memory usage.
+ * @returns memory usage in gigabytes
+ */
+inline float measureMemoryUsageCu() {
+  size_t free = 0, total = 0;
+  TRY_CUDA( cudaMemGetInfo(&free, &total) );
+  return float(total - free) / (1024.0f * 1024.0f * 1024.0f);
+}
+#pragma endregion
+
+
+
+
 #pragma region ATOMIC CAS
 /**
  * Perform an atomic compare-and-swap operation on a float value.

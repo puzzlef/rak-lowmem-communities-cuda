@@ -236,12 +236,16 @@ inline auto rakLowmemInvokeOmp(const G& x, const RakOptions& o, FI fi, FM fm, FA
   // Get graph properties.
   size_t S = x.span();
   size_t N = x.order();
+  // Measure initial memory usage.
+  float m0 = measureMemoryUsage();
   // Allocate buffers.
   vector<F> vaff(S);  // Affected vertex flag
   vector<K> vcom(S);  // Community membership
   vector<array<K, SLOTS>*> mcs(T);    // Hashtable keys
   vector<array<V, SLOTS>*> mws(T);  // Hashtable values
   rakLowmemAllocateHashtablesW(mcs, mws);
+  // Measure memory usage after allocation.
+  float m1 = measureMemoryUsage();
   // Perform RAK algorithm.
   float tm = 0, ti = 0;  // Time spent in different phases
   float t  = measureDuration([&]() {
@@ -256,7 +260,7 @@ inline auto rakLowmemInvokeOmp(const G& x, const RakOptions& o, FI fi, FM fm, FA
     }
   }, o.repeat);
   rakLowmemFreeHashtablesW(mcs, mws);
-  return RakResult<K>(vcom, l, t, tm/o.repeat, ti/o.repeat);
+  return RakResult<K>(vcom, l, t, tm/o.repeat, ti/o.repeat, m1-m0);
 }
 #pragma endregion
 

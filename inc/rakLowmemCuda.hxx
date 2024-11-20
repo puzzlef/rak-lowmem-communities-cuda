@@ -73,7 +73,7 @@ template <int SLOTS=8, int BLIM=128, bool TRYWARP=true, class O, class K, class 
 void __global__ rakLowmemMoveIterationGroupCukU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K NB, K NE, bool PICKLESS) {
   DEFINE_CUDA(t, b, B, G);
   constexpr int  PLIM    = BLIM/SLOTS;
-  constexpr bool USEWARP = TRYWARP && SLOTS==32;
+  constexpr bool USEWARP = TRYWARP && SLOTS<=32;
   __shared__ K   mcs[BLIM];
   __shared__ V   mws[BLIM];
   __shared__ int has[USEWARP? 1 : PLIM];
@@ -157,7 +157,7 @@ template <int SLOTS=8, int BLIM=128, bool TRYWARP=true, bool TRYMERGE=false, cla
 void __global__ rakLowmemMoveIterationBlockCukU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K NB, K NE, bool PICKLESS) {
   DEFINE_CUDA(t, b, B, G);
   constexpr int  PLIM = BLIM/SLOTS;
-  constexpr bool USEWARP     =  TRYWARP  && SLOTS==32;
+  constexpr bool USEWARP     =  TRYWARP  && SLOTS<=32;
   constexpr bool USEMERGE    =  TRYMERGE && PLIM > 1;
   constexpr bool SHARED      = !USEMERGE && SLOTS < BLIM;
   constexpr bool SHAREDMERGE =  USEMERGE && PLIM > 2;
@@ -184,8 +184,8 @@ void __global__ rakLowmemMoveIterationBlockCukU(uint64_cu *ncom, K *vcom, F *vaf
     __syncthreads();
     // Merge sketches if necessary.
     if (USEMERGE && p>0) {
-      if (!USEWARP) sketchMergeCudU<SHAREDMERGE>(mcs, mws, has+p, pmcs, pmws, g, s);
-      else      sketchMergeWarpCudU<SHAREDMERGE>(mcs, mws, pmcs, pmws, g, s);
+      if (!USEWARP)   sketchMergeCudU<SHAREDMERGE>(mcs, mws, has+p, pmcs, pmws, g, s);
+      else sketchMergeWarpCudU<SHAREDMERGE, SLOTS>(mcs, mws, pmcs, pmws, g, s);
     }
     if (USEMERGE) __syncthreads();
     // Find best community for u.

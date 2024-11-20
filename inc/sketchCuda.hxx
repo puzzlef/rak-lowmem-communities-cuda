@@ -68,23 +68,22 @@ inline void __device__ sketchAccumulateCudU(K *mcs, V *mws, int *has, K c, V w, 
  * @param w edge weight to accumulate
  * @param g cooperative thread group
  * @param s slot index
- * @note Uses warp-specific optimization, but the sketch size must be 32.
+ * @note Uses warp-specific optimization, but the sketch size must be <=32.
  */
 template <bool SHARED=false, class K, class V, class TG>
 inline void __device__ sketchAccumulateWarpCudU(K *mcs, V *mws, K c, V w, const TG& g, int s) {
-  const uint32_t ALL = 0xFFFFFFFF;
   // Add edge weight to community.
   if (mcs[s]==c) {
     if (!SHARED) mws[s] += w;
     else atomicAdd(&mws[s], w);
   }
-  uint32_t has = __ballot_sync(ALL, mcs[s]==c);
+  uint32_t has = g.ballot(mcs[s]==c);
   // Done if community is already in the list.
   if (has) return;
   uint32_t fre = 0;
   while (1) {
     // Find empty slot.
-    fre = __ballot_sync(ALL, mws[s]==V());
+    fre = g.ballot(mws[s]==V());
     uint32_t frs = __ffs(fre) - 1;
     if (fre==0) break;
     // Add community to list.
@@ -98,7 +97,7 @@ inline void __device__ sketchAccumulateWarpCudU(K *mcs, V *mws, K c, V w, const 
         else fre = 0;
       }
     }
-    if (SHARED) fre = __all_sync(ALL, fre!=0);  // `fre` may be been updated
+    if (SHARED) fre = g.all(fre!=0);  // `fre` may be been updated
     if (!SHARED || fre!=0) break;
   }
   // Subtract edge weight from non-matching communities.
@@ -139,17 +138,17 @@ inline void __device__ sketchMergeCudU(K *mcs, V *mws, int *has, const K* pmcs, 
 /**
  * Merge two warp-sized Misra-Gries sketches [device function].
  * @tparam SHARED are the slots shared among threads?
+ * @tparam SLOTS number of slots in the sketch
  * @param mcs majority linked communities (updated)
  * @param mws total edge weight to each majority community (updated)
  * @param pmcs majority linked communities to merge
  * @param pmws total edge weight to each majority community to merge
  * @param g cooperative thread group
  * @param s slot index
- * @note Uses warp-specific optimization, but the sketch size must be 32.
+ * @note Uses warp-specific optimization, but the sketch size must be <=32.
  */
-template <bool SHARED=false, class K, class V, class TG>
+template <bool SHARED=false, int SLOTS=8, class K, class V, class TG>
 inline void __device__ sketchMergeWarpCudU(K *mcs, V *mws, const K* pmcs, const V* pmws, const TG& g, int s) {
-  constexpr int SLOTS = 32;
   for (int i=0; i<SLOTS; ++i) {
     K c = pmcs[i];
     V w = pmws[i];

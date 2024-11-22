@@ -258,9 +258,6 @@ inline void rakLowmemMoveIterationBlockCuU(uint64_cu *ncom, K *vcom, F *vaff, co
  */
 template <int SLOTS=8, bool TRYWARP=true, bool TRYMERGE=true, class O, class K, class V, class F>
 inline int rakLowmemLoopCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K N, K NL, K NM, double E, int L) {
-  constexpr int SLOTSL = SLOTS;
-  constexpr int SLOTSM = SLOTS>32? SLOTS : 32;
-  constexpr int SLOTSH = SLOTS;
   int l = 0;
   uint64_cu n = 0;
   const int PICKSTEP = 4;
@@ -268,9 +265,8 @@ inline int rakLowmemLoopCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, co
   while (l<L) {
     bool PICKLESS = l % PICKSTEP == 0;
     fillValueCuW(ncom, 1, uint64_cu());
-    if (NL) rakLowmemMoveIterationGroupCuU<SLOTSL, 32,  TRYWARP>          (ncom, vcom, vaff, xoff, xedg, xwei, K(), NL,   PICKLESS);
-    if (NM) rakLowmemMoveIterationBlockCuU<SLOTSM, 32,  TRYWARP, TRYMERGE>(ncom, vcom, vaff, xoff, xedg, xwei, NL, NL+NM, PICKLESS);
-    if (NH) rakLowmemMoveIterationBlockCuU<SLOTSH, 256, TRYWARP, TRYMERGE>(ncom, vcom, vaff, xoff, xedg, xwei, NL+NM, N,  PICKLESS);
+    if (NL+NM) rakLowmemMoveIterationGroupCuU<SLOTS, 32,  TRYWARP>          (ncom, vcom, vaff, xoff, xedg, xwei, K(),   NL+NM, PICKLESS);
+    if (NH)    rakLowmemMoveIterationBlockCuU<SLOTS, 256, TRYWARP, TRYMERGE>(ncom, vcom, vaff, xoff, xedg, xwei, NL+NM, N,     PICKLESS);
     TRY_CUDA( cudaMemcpy(&n, ncom, sizeof(uint64_cu), cudaMemcpyDeviceToHost) ); ++l;
     if (!PICKLESS && double(n)/N <= E) break;
   }

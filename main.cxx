@@ -80,14 +80,18 @@ void runExperiment(const G& x) {
     flog(b0, "rakLowmemStaticOmp");
   }
   // Find static low-memory RAK, using CUDA (using Boyer-Moore voting algorithm).
-  for (int i=0; i<1; ++i) {
-    auto b0 = rakLowmemStaticCuda<1>(x, {REPEAT_METHOD});
-    flog(b0, "rakLowmemStaticCudaBm");
+  for (int i=1; i<=8; ++i) {
+    char buf[64];
+    sprintf(buf, "rakLowmemStaticCudaBm%d", i);
+    auto b0 = rakLowmemStaticCuda<1>(x, {REPEAT_METHOD, 0.05, 20, i});
+    flog(b0, buf);
   }
   // Find static low-memory RAK, using CUDA (using Misra-Gries sketch).
-  for (int i=0; i<1; ++i) {
-    auto b0 = rakLowmemStaticCuda<8>(x, {REPEAT_METHOD});
-    flog(b0, "rakLowmemStaticCudaMg");
+  for (int i=1; i<=8; ++i) {
+    char buf[64];
+    sprintf(buf, "rakLowmemStaticCudaMg%d", i);
+    auto b0 = rakLowmemStaticCuda<8>(x, {REPEAT_METHOD, 0.05, 20, i});
+    flog(b0, buf);
   }
   // Find static RAK, using CUDA.
   {

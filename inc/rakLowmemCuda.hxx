@@ -467,10 +467,10 @@ inline void rakLowmemMgMoveIterationBlockCuU(uint64_cu *ncom, K *vcom, F *vaff, 
  * @returns number of iterations performed
  */
 template <int SLOTS=8, bool RESCAN=false, bool TRYWARP=true, bool TRYMERGE=true, class O, class K, class V, class F>
-inline int rakLowmemLoopCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K N, K NL, double E, int L) {
+inline int rakLowmemLoopCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K N, K NL, double E, int L, int PICKSTEP=4) {
   int l = 0;
   uint64_cu n = 0;
-  const int PICKSTEP = 4;
+  // const int PICKSTEP = 4;
   const K NH = N - NL;
   while (l<L) {
     bool PICKLESS = l % PICKSTEP == 0;
@@ -548,6 +548,7 @@ inline auto rakLowmemInvokeCuda(const G& x, const RakOptions& o, FI fi, FM fm) {
   // Get RAK options.
   int    L = o.maxIterations, l = 0;
   double E = o.tolerance;
+  int    P = o.pickStep;
   // Allocate buffers.
   vector<O> xoff(N+1);  // CSR offsets array
   vector<K> xedg(M);    // CSR edge keys array
@@ -591,7 +592,7 @@ inline auto rakLowmemInvokeCuda(const G& x, const RakOptions& o, FI fi, FM fm) {
     // Mark initial affected vertices.
     tm += measureDuration([&]() { fm(vaffD, ks); });
     // Perform RAK iterations.
-    l = rakLowmemLoopCuU<SLOTS, RESCAN, TRYWARP, TRYMERGE>(ncomD, vcomD, vaffD, xoffD, xedgD, xweiD, K(N), K(NL), E, L);
+    l = rakLowmemLoopCuU<SLOTS, RESCAN, TRYWARP, TRYMERGE>(ncomD, vcomD, vaffD, xoffD, xedgD, xweiD, K(N), K(NL), E, L, P);
   }, o.repeat);
   // Obtain final community membership.
   TRY_CUDA( cudaMemcpy(vcomc.data(), vcomD, N * sizeof(K), cudaMemcpyDeviceToHost) );

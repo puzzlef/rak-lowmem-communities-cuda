@@ -24,6 +24,8 @@ struct RakOptions {
   double tolerance;
   /** Maximum number of iterations [20]. */
   int maxIterations;
+  /** When to run the pick-less mitigation [4]. */
+  int pickStep;
   #pragma endregion
 
 
@@ -33,9 +35,10 @@ struct RakOptions {
    * @param repeat number of times to repeat the algorithm [1]
    * @param tolerance tolerance for convergence [0.05]
    * @param maxIterations maximum number of iterations [20]
+   * @param pickStep when to run the pick-less mitigation [4]
    */
-  RakOptions(int repeat=1, double tolerance=0.05, int maxIterations=20) :
-  repeat(repeat), tolerance(tolerance), maxIterations(maxIterations) {}
+  RakOptions(int repeat=1, double tolerance=0.05, int maxIterations=20, int pickStep=4) :
+  repeat(repeat), tolerance(tolerance), maxIterations(maxIterations), pickStep(pickStep) {}
   #pragma endregion
 };
 

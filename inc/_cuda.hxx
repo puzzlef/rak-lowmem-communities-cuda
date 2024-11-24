@@ -23,17 +23,6 @@ using std::exit;
 
 
 
-#pragma region TYPES
-/** 64-bit signed integer (CUDA specific). */
-typedef long long int          int64_cu;
-/** 64-bit unsigned integer (CUDA specific). */
-typedef unsigned long long int uint64_cu;
-// - https://stackoverflow.com/a/32862733/1413259
-#pragma endregion
-
-
-
-
 #pragma region KEYWORDS
 #ifndef __global__
 /** CUDA kernel function. */
@@ -102,6 +91,53 @@ template <unsigned int SIZE, class T>
 inline thread_group tiled_partition(const T& g) { return thread_group(); }
 }
 #endif
+#pragma endregion
+
+
+
+
+#pragma region TYPES
+/** 64-bit signed integer (CUDA specific). */
+typedef long long int          int64_cu;
+/** 64-bit unsigned integer (CUDA specific). */
+typedef unsigned long long int uint64_cu;
+// - https://stackoverflow.com/a/32862733/1413259
+
+
+/**
+ * A pair of values (CUDA specific).
+ * @tparam T1 first value type
+ * @tparam T2 second value type
+ */
+template <class T1, class T2>
+struct pair_cu {
+  T1 first;
+  T2 second;
+
+  /** Default constructor [host/device function]. */
+  inline __host__ __device__ pair_cu()
+  : first(), second() {}
+
+  /**
+   * Define a pair of values [host/device function].
+   * @param first first value
+   * @param second second value
+   */
+  inline __host__ __device__ pair_cu(T1 first, T2 second)
+  : first(first), second(second) {}
+};
+
+
+/**
+ * Make a pair of values [host/device function].
+ * @param first first value
+ * @param second second value
+ * @returns pair of values
+ */
+template <class T1, class T2>
+inline __host__ __device__ pair_cu<T1, T2> makePairCu(T1&& first, T2&& second) {
+  return pair_cu<T1, T2>(first, second);
+}
 #pragma endregion
 
 

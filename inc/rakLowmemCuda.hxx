@@ -9,6 +9,7 @@
 #include "rakCuda.hxx"
 
 using std::vector;
+using std::pair;
 using std::make_pair;
 using std::max;
 using std::distance;
@@ -22,7 +23,39 @@ using cooperative_groups::this_thread_block;
 #pragma region METHODS
 #pragma region SCAN COMMUNITIES
 /**
- * Scan communities connected to a vertex [device function].
+ * Scan communities connected to a vertex, for Boyer-Moore voting algorithm [device function].
+ * @tparam SELF include self-loops?
+ * @param xoff offsets of original graph
+ * @param xedg edge keys of original graph
+ * @param xwei edge values of original graph
+ * @param vcom community each vertex belongs to
+ * @param u given vertex
+ * @param d original community of u
+ * @param i start index
+ * @param DI index stride
+ * @returns majority community, and total edge weight to it
+ */
+template <bool SELF=false, class O, class K, class V>
+inline auto __device__ rakLowmemBmScanCommunitiesCud(const O *xoff, const K *xedg, const V *xwei, const K *vcom, K u, K d, O i, O DI) {
+  O EO = xoff[u];
+  O EN = xoff[u+1] - xoff[u];
+  K mc = d;
+  V mw = V();
+  for (; i<EN; i+=DI) {
+    K v = xedg[EO+i];
+    V w = xwei[EO+i];
+    K c = vcom[v];
+    if (!SELF && u==v) continue;
+    if (c==mc)     mw += w;
+    else if (mw>w) mw -= w;
+    else { mc = c; mw  = w; }
+  }
+  return makePairCu(mc, mw);
+}
+
+
+/**
+ * Scan communities connected to a vertex, for Misra-Gries sketch [device function].
  * @tparam SELF include self-loops?
  * @tparam SHARED are the slots shared among threads?
  * @tparam USEWARP use warp-specific optimization?
@@ -40,7 +73,7 @@ using cooperative_groups::this_thread_block;
  * @param DI index stride
  */
 template <bool SELF=false, bool SHARED=false, bool USEWARP=true, class O, class K, class V, class TG>
-inline void __device__ rakLowmemScanCommunitiesCudU(K *mcs, V *mws, int *has, const O *xoff, const K *xedg, const V *xwei, const K *vcom, K u, const TG& g, int s, O i, O DI) {
+inline void __device__ rakLowmemMgScanCommunitiesCudU(K *mcs, V *mws, int *has, const O *xoff, const K *xedg, const V *xwei, const K *vcom, K u, const TG& g, int s, O i, O DI) {
   O EO = xoff[u];
   O EN = xoff[u+1] - xoff[u];
   for (; i<EN; i+=DI) {
@@ -55,7 +88,7 @@ inline void __device__ rakLowmemScanCommunitiesCudU(K *mcs, V *mws, int *has, co
 
 
 /**
- * Rescan communities connected to a vertex [device function].
+ * Rescan communities connected to a vertex, for Misra-Gries sketch [device function].
  * @tparam SELF include self-loops?
  * @tparam SHARED are the slots shared among threads?
  * @param mcs majority linked communities (updated)
@@ -70,7 +103,7 @@ inline void __device__ rakLowmemScanCommunitiesCudU(K *mcs, V *mws, int *has, co
  * @param DI index stride
  */
 template <bool SELF=false, bool SHARED=false, class O, class K, class V>
-inline void __device__ rakLowmemRescanCommunitiesCudU(K *mcs, V *mws, const O *xoff, const K *xedg, const V *xwei, const K *vcom, K u, int s, O i, O DI) {
+inline void __device__ rakLowmemMgRescanCommunitiesCudU(K *mcs, V *mws, const O *xoff, const K *xedg, const V *xwei, const K *vcom, K u, int s, O i, O DI) {
   O EO = xoff[u];
   O EN = xoff[u+1] - xoff[u];
   for (; i<EN; i+=DI) {
@@ -90,7 +123,135 @@ inline void __device__ rakLowmemRescanCommunitiesCudU(K *mcs, V *mws, const O *x
 
 #pragma region MOVE ITERATION
 /**
- * Move each vertex to its best community, using group-per-vertex approach [kernel].
+ * Move each vertex to its best community, for Boyer-Moore voting algorithm, using thread-per-vertex approach [kernel].
+ * @tparam BLIM size of each thread block
+ * @param ncom number of changed vertices (updated)
+ * @param vcom community each vertex belongs to (updated)
+ * @param vaff vertex affected flags (updated)
+ * @param xoff offsets of original graph
+ * @param xedg edge keys of original graph
+ * @param xwei edge values of original graph
+ * @param NB begin vertex (inclusive)
+ * @param NE end vertex (exclusive)
+ * @param PICKLESS allow only picking smaller community id?
+ */
+template <int BLIM=32, class O, class K, class V, class F>
+void __global__ rakLowmemBmMoveIterationThreadCukU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K NB, K NE, bool PICKLESS) {
+  DEFINE_CUDA(t, b, B, G);
+  __shared__ uint64_cu ncomb[BLIM];
+  ncomb[t] = 0;
+  for (K u=NB+b*B+t; u<NE; u+=G*B) {
+    if (!vaff[u]) continue;
+    K d = vcom[u];
+    // Scan communities connected to u.
+    auto mcw = rakLowmemBmScanCommunitiesCud<false>(xoff, xedg, xwei, vcom, u, d, O(0), O(1));
+    // Find best community for u.
+    K c = mcw.first;
+    vaff[u] = F(0);  // Mark u as unaffected
+    if (c==d) continue;
+    if (PICKLESS && c>d) continue;  // Pick smaller community-id (to avoid community swaps)
+    vcom[u] = c;
+    ++ncomb[t];
+    rakMarkNeighborsCudU(vaff, xoff, xedg, u, 0, 1);
+  }
+  // Update number of changed vertices.
+  __syncthreads();
+  sumValuesBlockReduceCudU(ncomb, BLIM, t);
+  if (t==0) atomicAdd(ncom, ncomb[0]);
+}
+
+
+/**
+ * Move each vertex to its best community, for Boyer-Moore voting algorithm, using thread-per-vertex approach.
+ * @tparam BLIM size of each thread block
+ * @param ncom number of changed vertices (updated)
+ * @param vcom community each vertex belongs to (updated)
+ * @param vaff vertex affected flags (updated)
+ * @param xoff offsets of original graph
+ * @param xedg edge keys of original graph
+ * @param xwei edge values of original graph
+ * @param NB begin vertex (inclusive)
+ * @param NE end vertex (exclusive)
+ * @param PICKLESS allow only picking smaller community id?
+ */
+template <int BLIM=32, class O, class K, class V, class F>
+inline void rakLowmemBmMoveIterationThreadCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K NB, K NE, bool PICKLESS) {
+  const int B = BLIM;
+  const int G = gridSizeCu(NE-NB, B, GRID_LIMIT_MAP_CUDA);
+  rakLowmemBmMoveIterationThreadCukU<BLIM><<<G, B>>>(ncom, vcom, vaff, xoff, xedg, xwei, NB, NE, PICKLESS);
+}
+
+
+/**
+ * Move each vertex to its best community, for Boyer-Moore voting algorithm, using block-per-vertex approach [kernel].
+ * @tparam BLIM size of each thread block
+ * @param ncom number of changed vertices (updated)
+ * @param vcom community each vertex belongs to (updated)
+ * @param vaff vertex affected flags (updated)
+ * @param xoff offsets of original graph
+ * @param xedg edge keys of original graph
+ * @param xwei edge values of original graph
+ * @param NB begin vertex (inclusive)
+ * @param NE end vertex (exclusive)
+ * @param PICKLESS allow only picking smaller community id?
+ */
+template <int BLIM=256, class O, class K, class V, class F>
+void __global__ rakLowmemBmMoveIterationBlockCukU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K NB, K NE, bool PICKLESS) {
+  DEFINE_CUDA(t, b, B, G);
+  __shared__ K mcs[BLIM];
+  __shared__ V mws[BLIM];
+  __shared__ uint64_cu ncomb;
+  __shared__ F vaffb;
+  const auto g = this_thread_block();
+  if (t==0) ncomb = 0;
+  for (K u=NB+b; u<NE; u+=G) {
+    if (t==0) vaffb = vaff[u];
+    __syncthreads();
+    if (!vaffb) continue;
+    K d = vcom[u];
+    // Scan communities connected to u.
+    auto mcw = rakLowmemBmScanCommunitiesCud<false>(xoff, xedg, xwei, vcom, u, d, O(t), O(BLIM));
+    mcs[t] = mcw.first;
+    mws[t] = mcw.second;
+    // Find best community for u.
+    __syncthreads();
+    sketchMaxGroupReduceCudU(mcs, mws, BLIM, g, t);
+    K c = mcs[0];
+    if (t==0) vaff[u] = F(0);  // Mark u as unaffected
+    if (c==d) continue;
+    if (PICKLESS && c>d) continue;  // Pick smaller community-id (to avoid community swaps)
+    if (t==0) vcom[u] = c;
+    if (t==0) ++ncomb;
+    rakMarkNeighborsCudU(vaff, xoff, xedg, u, t, BLIM);
+  }
+  // Update number of changed vertices.
+  if (t==0) atomicAdd(ncom, ncomb);
+}
+
+
+/**
+ * Move each vertex to its best community, for Boyer-Moore voting algorithm, using block-per-vertex approach.
+ * @tparam BLIM size of each thread block
+ * @param ncom number of changed vertices (updated)
+ * @param vcom community each vertex belongs to (updated)
+ * @param vaff vertex affected flags (updated)
+ * @param xoff offsets of original graph
+ * @param xedg edge keys of original graph
+ * @param xwei edge values of original graph
+ * @param NB begin vertex (inclusive)
+ * @param NE end vertex (exclusive)
+ * @param PICKLESS allow only picking smaller community id?
+ */
+template <int BLIM=256, class O, class K, class V, class F>
+inline void rakLowmemBmMoveIterationBlockCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K NB, K NE, bool PICKLESS) {
+  const int B = BLIM;
+  const int G = gridSizeCu<true>(NE-NB, B, GRID_LIMIT_MAP_CUDA);
+  rakLowmemBmMoveIterationBlockCukU<BLIM><<<G, B>>>(ncom, vcom, vaff, xoff, xedg, xwei, NB, NE, PICKLESS);
+}
+
+
+/**
+ * Move each vertex to its best community, for Misra-Gries sketch, using group-per-vertex approach [kernel].
  * @tparam SLOTS number of slots in hashtable
  * @tparam BLIM size of each thread block
  * @tparam RESCAN rescan communities after populating sketch?
@@ -106,7 +267,7 @@ inline void __device__ rakLowmemRescanCommunitiesCudU(K *mcs, V *mws, const O *x
  * @param PICKLESS allow only picking smaller community id?
  */
 template <int SLOTS=8, int BLIM=32, bool RESCAN=false, bool TRYWARP=true, class O, class K, class V, class F>
-void __global__ rakLowmemMoveIterationGroupCukU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K NB, K NE, bool PICKLESS) {
+void __global__ rakLowmemMgMoveIterationGroupCukU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K NB, K NE, bool PICKLESS) {
   DEFINE_CUDA(t, b, B, G);
   constexpr int  PLIM    = BLIM/SLOTS;
   constexpr bool USEWARP = TRYWARP && SLOTS<=32;
@@ -129,13 +290,13 @@ void __global__ rakLowmemMoveIterationGroupCukU(uint64_cu *ncom, K *vcom, F *vaf
     // Scan communities connected to u.
     sketchClearCudU<false, SLOTS>(pmws, s);
     g.sync();
-    rakLowmemScanCommunitiesCudU<false, false, USEWARP>(pmcs, pmws, has+p, xoff, xedg, xwei, vcom, u, g, s, O(0), O(1));
+    rakLowmemMgScanCommunitiesCudU<false, false, USEWARP>(pmcs, pmws, has+p, xoff, xedg, xwei, vcom, u, g, s, O(0), O(1));
     g.sync();
     // Rescan communities if necessary.
     if (RESCAN) {
       sketchClearCudU<false, SLOTS>(pmws, s);
       g.sync();
-      rakLowmemRescanCommunitiesCudU<false, false>(pmcs, pmws, xoff, xedg, xwei, vcom, u, s, O(0), O(1));
+      rakLowmemMgRescanCommunitiesCudU<false, false>(pmcs, pmws, xoff, xedg, xwei, vcom, u, s, O(0), O(1));
       g.sync();
     }
     // Find best community for u.
@@ -157,7 +318,7 @@ void __global__ rakLowmemMoveIterationGroupCukU(uint64_cu *ncom, K *vcom, F *vaf
 
 
 /**
- * Move each vertex to its best community, using group-per-vertex approach [kernel].
+ * Move each vertex to its best community, for Misra-Gries sketch, using block-per-vertex approach.
  * @tparam SLOTS number of slots in hashtable
  * @tparam BLIM size of each thread block
  * @tparam RESCAN rescan communities after populating sketch?
@@ -173,16 +334,16 @@ void __global__ rakLowmemMoveIterationGroupCukU(uint64_cu *ncom, K *vcom, F *vaf
  * @param PICKLESS allow only picking smaller community id?
  */
 template <int SLOTS=8, int BLIM=32, bool RESCAN=false, bool TRYWARP=true, class O, class K, class V, class F>
-inline void rakLowmemMoveIterationGroupCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K NB, K NE, bool PICKLESS) {
+inline void rakLowmemMgMoveIterationGroupCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K NB, K NE, bool PICKLESS) {
   constexpr int PLIM = BLIM/SLOTS;
   const int B = BLIM;
   const int G = gridSizeCu(NE-NB, PLIM, GRID_LIMIT_MAP_CUDA);
-  rakLowmemMoveIterationGroupCukU<SLOTS, BLIM, RESCAN, TRYWARP><<<G, B>>>(ncom, vcom, vaff, xoff, xedg, xwei, NB, NE, PICKLESS);
+  rakLowmemMgMoveIterationGroupCukU<SLOTS, BLIM, RESCAN, TRYWARP><<<G, B>>>(ncom, vcom, vaff, xoff, xedg, xwei, NB, NE, PICKLESS);
 }
 
 
 /**
- * Move each vertex to its best community, using block-per-vertex approach [kernel].
+ * Move each vertex to its best community, for Misra-Gries sketch, using block-per-vertex approach [kernel].
  * @tparam SLOTS number of slots in hashtable
  * @tparam BLIM size of each thread block
  * @tparam RESCAN rescan communities after populating sketch?
@@ -199,7 +360,7 @@ inline void rakLowmemMoveIterationGroupCuU(uint64_cu *ncom, K *vcom, F *vaff, co
  * @param PICKLESS allow only picking smaller community id?
  */
 template <int SLOTS=8, int BLIM=256, bool RESCAN=false, bool TRYWARP=true, bool TRYMERGE=false, class O, class K, class V, class F>
-void __global__ rakLowmemMoveIterationBlockCukU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K NB, K NE, bool PICKLESS) {
+void __global__ rakLowmemMgMoveIterationBlockCukU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K NB, K NE, bool PICKLESS) {
   DEFINE_CUDA(t, b, B, G);
   constexpr int  PLIM = BLIM/SLOTS;
   constexpr bool USEWARP     =  TRYWARP  && SLOTS<=32;
@@ -225,7 +386,7 @@ void __global__ rakLowmemMoveIterationBlockCukU(uint64_cu *ncom, K *vcom, F *vaf
     // Scan communities connected to u.
     sketchClearCudU<SHARED, SLOTS>(mws, t);
     __syncthreads();
-    rakLowmemScanCommunitiesCudU<false, SHARED, USEWARP>(pmcs, pmws, has+p, xoff, xedg, xwei, vcom, u, g, s, O(p), O(PLIM));
+    rakLowmemMgScanCommunitiesCudU<false, SHARED, USEWARP>(pmcs, pmws, has+p, xoff, xedg, xwei, vcom, u, g, s, O(p), O(PLIM));
     __syncthreads();
     // Merge sketches if necessary.
     if (USEMERGE && p>0) {
@@ -237,7 +398,7 @@ void __global__ rakLowmemMoveIterationBlockCukU(uint64_cu *ncom, K *vcom, F *vaf
     if (RESCAN) {
       sketchClearCudU<SHARED, SLOTS>(mws, t);
       __syncthreads();
-      rakLowmemRescanCommunitiesCudU<false, SHARED>(mcs, mws, xoff, xedg, xwei, vcom, u, s, O(t), O(BLIM));
+      rakLowmemMgRescanCommunitiesCudU<false, SHARED>(mcs, mws, xoff, xedg, xwei, vcom, u, s, O(t), O(BLIM));
       __syncthreads();
     }
     // Find best community for u.
@@ -259,7 +420,7 @@ void __global__ rakLowmemMoveIterationBlockCukU(uint64_cu *ncom, K *vcom, F *vaf
 
 
 /**
- * Move each vertex to its best community, using block-per-vertex approach [kernel].
+ * Move each vertex to its best community, for Misra-Gries sketch, using block-per-vertex approach.
  * @tparam SLOTS number of slots in hashtable
  * @tparam BLIM size of each thread block
  * @tparam RESCAN rescan communities after populating sketch?
@@ -276,10 +437,10 @@ void __global__ rakLowmemMoveIterationBlockCukU(uint64_cu *ncom, K *vcom, F *vaf
  * @param PICKLESS allow only picking smaller community id?
  */
 template <int SLOTS=8, int BLIM=256, bool RESCAN=false, bool TRYWARP=true, bool TRYMERGE=false, class O, class K, class V, class F>
-inline void rakLowmemMoveIterationBlockCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K NB, K NE, bool PICKLESS) {
+inline void rakLowmemMgMoveIterationBlockCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K NB, K NE, bool PICKLESS) {
   const int B = BLIM;
   const int G = gridSizeCu<true>(NE-NB, B, GRID_LIMIT_MAP_CUDA);
-  rakLowmemMoveIterationBlockCukU<SLOTS, BLIM, RESCAN, TRYWARP, TRYMERGE><<<G, B>>>(ncom, vcom, vaff, xoff, xedg, xwei, NB, NE, PICKLESS);
+  rakLowmemMgMoveIterationBlockCukU<SLOTS, BLIM, RESCAN, TRYWARP, TRYMERGE><<<G, B>>>(ncom, vcom, vaff, xoff, xedg, xwei, NB, NE, PICKLESS);
 }
 #pragma endregion
 
@@ -314,8 +475,14 @@ inline int rakLowmemLoopCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, co
   while (l<L) {
     bool PICKLESS = l % PICKSTEP == 0;
     fillValueCuW(ncom, 1, uint64_cu());
-    if (NL) rakLowmemMoveIterationGroupCuU<SLOTS, 32,  RESCAN, TRYWARP>          (ncom, vcom, vaff, xoff, xedg, xwei, K(), NL, PICKLESS);
-    if (NH) rakLowmemMoveIterationBlockCuU<SLOTS, 256, RESCAN, TRYWARP, TRYMERGE>(ncom, vcom, vaff, xoff, xedg, xwei, NL,  N,  PICKLESS);
+    if (SLOTS==1) {
+      if (NL) rakLowmemBmMoveIterationThreadCuU<32>(ncom, vcom, vaff, xoff, xedg, xwei, K(), NL, PICKLESS);
+      if (NH) rakLowmemBmMoveIterationBlockCuU<256>(ncom, vcom, vaff, xoff, xedg, xwei, NL,  N,  PICKLESS);
+    }
+    else {
+      if (NL) rakLowmemMgMoveIterationGroupCuU<SLOTS, 32,  RESCAN, TRYWARP>          (ncom, vcom, vaff, xoff, xedg, xwei, K(), NL, PICKLESS);
+      if (NH) rakLowmemMgMoveIterationBlockCuU<SLOTS, 256, RESCAN, TRYWARP, TRYMERGE>(ncom, vcom, vaff, xoff, xedg, xwei, NL,  N,  PICKLESS);
+    }
     TRY_CUDA( cudaMemcpy(&n, ncom, sizeof(uint64_cu), cudaMemcpyDeviceToHost) ); ++l;
     if (!PICKLESS && double(n)/N <= E) break;
   }
@@ -328,20 +495,20 @@ inline int rakLowmemLoopCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, co
 
 #pragma region PARTITION
 /**
- * Partition vertices into low, mid, and high-degree sets.
+ * Partition vertices into low and high-degree sets.
  * @param ks vertex keys (updated)
  * @param x original graph
- * @returns number of low, mid-degree vertices
+ * @tparam DLOW low-degree threshold [128]
+ * @tparam DVLOW very low-degree threshold [4]
+ * @returns number of low-degree vertices
  */
 template <class G, class K>
-inline size_t rakLowmemPartitionVerticesCudaU(vector<K>& ks, const G& x) {
-  const K SWITCH_DEGREEK = 4;    // Very low-degree threshold
-  const K SWITCH_DEGREEL = 128;  // Low-degree threshold, switch to block-per-vertex
-  const K SWITCH_LIMIT   = 64;   // Avoid switching if number of vertices < SWITCH_LIMIT
+inline size_t rakLowmemPartitionVerticesCudaU(vector<K>& ks, const G& x, size_t DLOW=128, size_t DVLOW=4) {
+  const size_t SWITCH_LIMIT = 64;  // Avoid switching if number of vertices < SWITCH_LIMIT
   size_t N = ks.size();
   auto  kb = ks.begin(), ke = ks.end();
-  auto  fl = [&](K v) { return x.degree(v) < SWITCH_DEGREEK; };
-  auto  fm = [&](K v) { return x.degree(v) < SWITCH_DEGREEL; };
+  auto  fl = [&](K v) { return x.degree(v) < DVLOW; };
+  auto  fm = [&](K v) { return x.degree(v) < DLOW; };
   auto  il = partition(kb, ke, fl);
   auto  im = partition(il, ke, fm);
   size_t NK = distance(kb, il);
@@ -394,7 +561,7 @@ inline auto rakLowmemInvokeCuda(const G& x, const RakOptions& o, FI fi, FM fm) {
   uint64_cu *ncomD = nullptr;  // Number of changed vertices [device]
   // Partition vertices into low-degree and high-degree sets.
   vector<K> ks = vertexKeys(x);
-  size_t NL = rakLowmemPartitionVerticesCudaU(ks, x);
+  size_t NL = rakLowmemPartitionVerticesCudaU(ks, x, 128, 4);
   // Obtain data for CSR.
   csrCreateOffsetsW (xoff, x, ks);
   csrCreateEdgeKeysW(xedg, x, ks);

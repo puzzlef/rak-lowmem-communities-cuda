@@ -470,7 +470,7 @@ template <int SLOTS=8, bool RESCAN=false, bool TRYWARP=true, bool TRYMERGE=true,
 inline int rakLowmemLoopCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K N, K NL, double E, int L) {
   int l = 0;
   uint64_cu n = 0;
-  const int PICKSTEP = 4;
+  const int PICKSTEP = 8;
   const K NH = N - NL;
   while (l<L) {
     bool PICKLESS = l % PICKSTEP == 0;

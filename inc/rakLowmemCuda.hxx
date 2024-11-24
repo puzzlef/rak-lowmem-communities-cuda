@@ -251,22 +251,21 @@ inline void rakLowmemMoveIterationBlockCuU(uint64_cu *ncom, K *vcom, F *vaff, co
  * @param xwei edge values of original graph
  * @param N number of vertices
  * @param NL number of low-degree vertices
- * @param NM number of mid-degree vertices
  * @param E tolerance for convergence [0.05]
  * @param L maximum number of iterations [20]
  * @returns number of iterations performed
  */
 template <int SLOTS=8, bool TRYWARP=true, bool TRYMERGE=true, class O, class K, class V, class F>
-inline int rakLowmemLoopCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K N, K NL, K NM, double E, int L) {
+inline int rakLowmemLoopCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, const K *xedg, const V *xwei, K N, K NL, double E, int L) {
   int l = 0;
   uint64_cu n = 0;
   const int PICKSTEP = 4;
-  const K NH = N - NL - NM;
+  const K NH = N - NL;
   while (l<L) {
     bool PICKLESS = l % PICKSTEP == 0;
     fillValueCuW(ncom, 1, uint64_cu());
-    if (NL+NM) rakLowmemMoveIterationGroupCuU<SLOTS, 32,  TRYWARP>          (ncom, vcom, vaff, xoff, xedg, xwei, K(),   NL+NM, PICKLESS);
-    if (NH)    rakLowmemMoveIterationBlockCuU<SLOTS, 256, TRYWARP, TRYMERGE>(ncom, vcom, vaff, xoff, xedg, xwei, NL+NM, N,     PICKLESS);
+    if (NL) rakLowmemMoveIterationGroupCuU<SLOTS, 32,  TRYWARP>          (ncom, vcom, vaff, xoff, xedg, xwei, K(), NL, PICKLESS);
+    if (NH) rakLowmemMoveIterationBlockCuU<SLOTS, 256, TRYWARP, TRYMERGE>(ncom, vcom, vaff, xoff, xedg, xwei, NL,  N,  PICKLESS);
     TRY_CUDA( cudaMemcpy(&n, ncom, sizeof(uint64_cu), cudaMemcpyDeviceToHost) ); ++l;
     if (!PICKLESS && double(n)/N <= E) break;
   }
@@ -285,24 +284,21 @@ inline int rakLowmemLoopCuU(uint64_cu *ncom, K *vcom, F *vaff, const O *xoff, co
  * @returns number of low, mid-degree vertices
  */
 template <class G, class K>
-inline auto rakLowmemPartitionVerticesCudaU(vector<K>& ks, const G& x) {
-  // - degree <  SWITCH_DEGREEL: Switch to group-per-vertex approach
-  // - degree <  SWITCH_DEGREEM: Switch to block-per-vertex approach
-  // - degree >= SWITCH_DEGREEM: Continue with block-per-vertex approach (high block size)
-  const K SWITCH_DEGREEL = 4;    // Low-degree threshold
-  const K SWITCH_DEGREEM = 128;  // Medium-degree threshold
+inline size_t rakLowmemPartitionVerticesCudaU(vector<K>& ks, const G& x) {
+  const K SWITCH_DEGREEK = 4;    // Very low-degree threshold
+  const K SWITCH_DEGREEL = 128;  // Low-degree threshold, switch to block-per-vertex
   const K SWITCH_LIMIT   = 64;   // Avoid switching if number of vertices < SWITCH_LIMIT
   size_t N = ks.size();
   auto  kb = ks.begin(), ke = ks.end();
-  auto  fl = [&](K v) { return x.degree(v) < SWITCH_DEGREEL; };
-  auto  fm = [&](K v) { return x.degree(v) < SWITCH_DEGREEM; };
+  auto  fl = [&](K v) { return x.degree(v) < SWITCH_DEGREEK; };
+  auto  fm = [&](K v) { return x.degree(v) < SWITCH_DEGREEL; };
   auto  il = partition(kb, ke, fl);
   auto  im = partition(il, ke, fm);
-  size_t NL = distance(kb, il);
-  size_t NM = distance(il, im);
-  if (NL < SWITCH_LIMIT) { NM += NL; NL = 0; }
-  if (NM < SWITCH_LIMIT) NM = 0;
-  return make_pair(NL, NM);
+  size_t NK = distance(kb, il);
+  size_t NL = distance(il, im);
+  if (NK < SWITCH_LIMIT) { NL += NK; NK = 0; }
+  if (NL < SWITCH_LIMIT) NL = 0;
+  return NK + NL;
 }
 #pragma endregion
 
@@ -347,8 +343,7 @@ inline auto rakLowmemInvokeCuda(const G& x, const RakOptions& o, FI fi, FM fm) {
   uint64_cu *ncomD = nullptr;  // Number of changed vertices [device]
   // Partition vertices into low-degree and high-degree sets.
   vector<K> ks = vertexKeys(x);
-  auto  NLM = rakLowmemPartitionVerticesCudaU(ks, x);
-  size_t NL = NLM.first, NM = NLM.second;
+  size_t NL = rakLowmemPartitionVerticesCudaU(ks, x);
   // Obtain data for CSR.
   csrCreateOffsetsW (xoff, x, ks);
   csrCreateEdgeKeysW(xedg, x, ks);
@@ -378,7 +373,7 @@ inline auto rakLowmemInvokeCuda(const G& x, const RakOptions& o, FI fi, FM fm) {
     // Mark initial affected vertices.
     tm += measureDuration([&]() { fm(vaffD, ks); });
     // Perform RAK iterations.
-    l = rakLowmemLoopCuU<SLOTS, TRYWARP, TRYMERGE>(ncomD, vcomD, vaffD, xoffD, xedgD, xweiD, K(N), K(NL), K(NM), E, L);
+    l = rakLowmemLoopCuU<SLOTS, TRYWARP, TRYMERGE>(ncomD, vcomD, vaffD, xoffD, xedgD, xweiD, K(N), K(NL), E, L);
   }, o.repeat);
   // Obtain final community membership.
   TRY_CUDA( cudaMemcpy(vcomc.data(), vcomD, N * sizeof(K), cudaMemcpyDeviceToHost) );

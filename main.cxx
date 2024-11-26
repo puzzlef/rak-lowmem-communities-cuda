@@ -86,8 +86,24 @@ void runExperiment(const G& x) {
   }
   // Find static low-memory RAK, using CUDA (using Misra-Gries sketch).
   for (int i=0; i<1; ++i) {
-    auto b0 = rakLowmemStaticCuda<8>(x, {REPEAT_METHOD});
-    flog(b0, "rakLowmemStaticCudaMg");
+    auto b0 = rakLowmemStaticCuda<2>  (x, {REPEAT_METHOD});
+    flog(b0, "rakLowmemStaticCudaMg2");
+  }
+  for (int i=0; i<1; ++i) {
+    auto b0 = rakLowmemStaticCuda<4>  (x, {REPEAT_METHOD});
+    flog(b0, "rakLowmemStaticCudaMg4");
+  }
+  for (int i=0; i<1; ++i) {
+    auto b0 = rakLowmemStaticCuda<8>  (x, {REPEAT_METHOD});
+    flog(b0, "rakLowmemStaticCudaMg8");
+  }
+  for (int i=0; i<1; ++i) {
+    auto b0 = rakLowmemStaticCuda<16> (x, {REPEAT_METHOD});
+    flog(b0, "rakLowmemStaticCudaMg16");
+  }
+  for (int i=0; i<1; ++i) {
+    auto b0 = rakLowmemStaticCuda<32> (x, {REPEAT_METHOD});
+    flog(b0, "rakLowmemStaticCudaMg32");
   }
   // Find static RAK, using CUDA.
   {

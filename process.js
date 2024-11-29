@@ -5,7 +5,7 @@ const path = require('path');
 const ROMPTH = /^OMP_NUM_THREADS=(\d+)/;
 const RGRAPH = /^Loading graph .*\/(.*?)\.mtx \.\.\./m;
 const RORDER = /^order: (\d+) size: (\d+) (?:\[\w+\] )?\{\}/m;
-const RRESLT = /^\{(.+?) threads\} -> \{(.+?)ms, (.+?)ms mark, (.+?)ms init, (.+?)GB memory, (.+?) iters, (.+?) modularity\} (.+)/m;
+const RRESLT = /^\{(.+?) threads\} -> \{(.+?)ms, (.+?)ms mark, (.+?)ms init, (.+?)GB memory, (.+?) iters, (.+?) modularity, (.+?) communities\} (.+)/m;
 
 
 
@@ -60,7 +60,7 @@ function readLogLine(ln, data, state) {
     state.size  = parseFloat(size);
   }
   else if (RRESLT.test(ln)) {
-    var [, num_threads, time, marking_time, initialization_time, memory_usage, iterations, modularity, technique] = RRESLT.exec(ln);
+    var [, num_threads, time, marking_time, initialization_time, memory_usage, iterations, modularity, communities, technique] = RRESLT.exec(ln);
     data.get(state.graph).push(Object.assign({}, state, {
       num_threads: parseFloat(num_threads),
       time:        parseFloat(time),
@@ -69,6 +69,7 @@ function readLogLine(ln, data, state) {
       memory_usage:        parseFloat(memory_usage),
       iterations:  parseFloat(iterations),
       modularity:  parseFloat(modularity),
+      communities: parseFloat(communities),
       technique,
     }));
   }

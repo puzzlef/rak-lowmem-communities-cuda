@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: Sahu
+    given-names: Subhajit
+    orcid: https://orcid.org/0000-0001-5140-6578
+title: "Memory Efficient GPU-based Label Propagation Algorithm (LPA) for Community Detection on Large Graphs"
+version: 1.0.0
+doi: 10.48550/arXiv.2411.19901
+date-released: 2024-11-29
